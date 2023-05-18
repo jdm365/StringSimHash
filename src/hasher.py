@@ -6,24 +6,9 @@ from rapidfuzz.distance.Indel import normalized_similarity
 import faiss
 import logging
 from matplotlib import pyplot as plt
+from utils import create_dedupe_df
 
 
-def create_dedupe_df(idxs, distances):
-    """
-    Create a dataframe of matches from the output of a knn model
-    @param idxs: array of indices of matches
-    @param distances: array of distances of matches
-    @return: dataframe of matches
-    """
-    deduped_df = pd.DataFrame({
-        'orig_idxs': np.arange(len(idxs)),
-        'match_idxs': idxs.tolist(), 
-        'distance': distances.tolist()
-        }).explode(['match_idxs', 'distance'])
-
-    ## Remove self matches
-    deduped_df = deduped_df[deduped_df['orig_idxs'] < deduped_df['match_idxs']]
-    return deduped_df
 
 
 def get_sim_embeddings(items, dim=512):
@@ -34,16 +19,17 @@ def get_sim_embeddings(items, dim=512):
     return vectors
 
 
-def dedup(data, k=5, dim=128) -> pd.DataFrame:
-    """
-    Remove duplicates 
-    @param items: list of items
-    @param k: number of neighbors to consider
-    @return: dataframe of matches
-    """
-
+def dedup(data, k=5, dim=128, exact=False) -> pd.DataFrame:
     embeddings = get_sim_embeddings(data, dim=dim)
-    index = faiss.IndexFlatL2(embeddings.shape[-1])
+
+    if exact:
+        index = faiss.IndexFlatL2(embeddings.shape[-1])
+    else:
+        index = faiss.index_factory(dim, f"IVF64,PQ{32 if dim < 256 else 64}")
+        sampled_embeddings = embeddings[np.random.choice(len(embeddings), size=16_384)]
+        index.train(sampled_embeddings)
+        index.nprobe = 8
+
     index.add(embeddings)
 
     distances, idxs = index.search(embeddings, k=k)
@@ -79,14 +65,16 @@ def test_dedup(data, dedup_col, **kwargs):
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
 
-    FILENAME = 'data/corrupted_companies_dedup.feather'
+    FILENAME = '../data/corrupted_companies_dedup.feather'
     data = pd.read_feather(FILENAME)
 
+    K = 5
+
     recalls = []
-    dims    = [16, 32, 64, 128, 256, 512, 1024]
+    dims    = [32, 64, 128, 256, 512, 1024]
     for dim in dims:
         logging.info(f'Dimension: {dim}')
-        match_df = test_dedup(data, 'company', k=5, dim=dim)
+        match_df = test_dedup(data, 'company', k=K, dim=dim)
         recalls.append(np.sum(match_df['is_match']) / len(match_df))
 
     plt.plot(dims, recalls)
@@ -95,4 +83,4 @@ if __name__ == '__main__':
     plt.title('Recall @5 vs Dimension')
     plt.show()
 
-    plt.savefig('plots/recall@5_vs_dim.png')
+    plt.savefig(f'plots/recall@{K}_vs_dim.png')
