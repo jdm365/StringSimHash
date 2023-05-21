@@ -65,7 +65,7 @@ def test_dedup(data, dedup_col, **kwargs):
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
 
-    FILENAME = '../data/corrupted_companies_dedup.feather'
+    FILENAME = 'data/corrupted_companies_dedup.feather'
     data = pd.read_feather(FILENAME)
 
     K = 5
