@@ -30,7 +30,7 @@ def dedup(data, k=5, dim=128, exact=False) -> pd.DataFrame:
         index.train(sampled_embeddings)
         index.nprobe = 8
 
-    index.add(embeddings)
+    index.add(embeddings, np.arange(len(embeddings)))
 
     distances, idxs = index.search(embeddings, k=k)
     df = create_dedupe_df(idxs, distances)
@@ -61,7 +61,6 @@ def test_dedup(data, dedup_col, **kwargs):
     return match_df
 
 
-
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
 
@@ -74,7 +73,7 @@ if __name__ == '__main__':
     dims    = [32, 64, 128, 256, 512, 1024]
     for dim in dims:
         logging.info(f'Dimension: {dim}')
-        match_df = test_dedup(data, 'company', k=K, dim=dim)
+        match_df = test_dedup(data, 'company', k=K, dim=dim, exact=False)
         recalls.append(np.sum(match_df['is_match']) / len(match_df))
 
     plt.plot(dims, recalls)
