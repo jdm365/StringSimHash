@@ -28,9 +28,13 @@ std::vector<int> get_topk_strings_all_wrapper(
     return get_topk_strings_all(query_strings, search_strings, k);
 }
 
+std::vector<int> get_dedup_candidates_wrapper(std::vector<std::string> strings, int k) {
+	return get_dedup_candidates(strings, k);
+}
+
 
 PYBIND11_MODULE(StringDedup, m) {
-	omp_set_num_threads(24);
+	omp_set_num_threads(omp_get_max_threads());
 
 	m.doc() = "String Dedup Backend";
 
@@ -42,4 +46,6 @@ PYBIND11_MODULE(StringDedup, m) {
 			pybind11::arg("a"), pybind11::arg("strings"), pybind11::arg("k"));
 	m.def("get_topk_strings_all", &get_topk_strings_all_wrapper, "Get the top-k most similar strings for all queries",
 			pybind11::arg("query_strings"), pybind11::arg("search_strings"), pybind11::arg("k"));
+	m.def("get_dedup_candidates", &get_dedup_candidates_wrapper, "Get the top-k most similar strings for all queries",
+			pybind11::arg("strings"), pybind11::arg("k"));
 }

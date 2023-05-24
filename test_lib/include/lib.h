@@ -13,3 +13,4 @@ std::vector<int> get_topk_strings_all(
 		std::vector<std::string> search_strings, 
 		int k
 		);
+std::vector<int> get_dedup_candidates(std::vector<std::string> strings, int k);

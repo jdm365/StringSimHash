@@ -56,8 +56,8 @@ int main() {
 	}
 	*/
 
-	std::vector<int> topk = get_topk_strings_all(query_strings, search_strings, 50);
-	// get_topk_strings_all_tiled(strings, 50);
+	//std::vector<int> topk = get_topk_strings_all(query_strings, search_strings, 50);
+	std::vector<int> topk = get_dedup_candidates(search_strings, 50);
 
 	auto end = std::chrono::high_resolution_clock::now();
 	auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end-start).count();

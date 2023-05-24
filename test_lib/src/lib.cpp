@@ -93,7 +93,6 @@ std::vector<int> get_topk_strings_all(
 	std::vector<int> topk_idxs(n_queries * k);
 
 
-	omp_set_num_threads(24);
 	#pragma omp parallel for
 	for (int idx = 0; idx < n_queries; ++idx) {
 		float topk_distances[k];
@@ -130,5 +129,50 @@ std::vector<int> get_topk_strings_all(
 	return topk_idxs;
 }
 
+std::vector<int> get_dedup_candidates(std::vector<std::string> strings, int k) {
+	int n_strings  = strings.size();
+
+	std::vector<int> topk_idxs(n_strings * k);
+
+	// Bad. Not obvious. Need to fix.
+
+
+	#pragma omp parallel for
+	for (int idx = 0; idx < n_strings; ++idx) {
+		float topk_distances[k];
+		int   _topk_idxs[k];
+		float distance;
+
+		for (int i = 0; i < k; ++i) {
+			topk_distances[i] = std::numeric_limits<float>::min();
+		}
+
+		for (int jdx = 0; jdx < n_strings; ++jdx) {
+			if (idx < jdx) continue;
+
+			// distance = get_sim_normed(query_strings[idx], search_strings[jdx]);
+			distance = get_sim_normed_indel(strings[idx], strings[jdx]);
+
+			if (jdx < k) {
+				_topk_idxs[jdx] = jdx;
+				topk_distances[jdx] = distance;
+				continue;
+			}
+
+			for (int i = 0; i < k; ++i) {
+				if (distance > topk_distances[i]) {
+					_topk_idxs[i] = jdx;
+					topk_distances[i] = distance;
+					break;
+				}
+			}
+		}
+
+		for (int i = 0; i < k; ++i) {
+			topk_idxs[idx * k + i] = _topk_idxs[i];
+		}
+	}
+	return topk_idxs;
+}
 
 

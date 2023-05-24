@@ -9,11 +9,34 @@ import logging
 from matplotlib import pyplot as plt
 from utils import create_dedupe_df
 
-from StringDedup import get_topk_strings_all
+from StringDedup import get_topk_strings_all, get_dedup_candidates
+
+
+
+def get_random_sample(items, dim=512, neg_sample_dim=128):
+    str_list = []
+    for idx in range(dim):
+        if idx == 0:
+            str_list.append(np.random.choice(items))
+            continue
+
+        rand_strings = np.random.choice(items, size=neg_sample_dim)
+        sims = process.cdist(
+                rand_strings, 
+                str_list,
+                scorer=normalized_similarity, 
+                workers=-1
+                )
+
+        ## Get least overall similar to current sample
+        avg_sims = np.sum(sims, axis=1)
+        str_list.append(rand_strings[np.argmin(avg_sims)])
+    return str_list
 
 
 def get_sim_embeddings(items, dim=512):
-    rand_strings = np.random.choice(items, size=dim)
+    #rand_strings = np.random.choice(items, size=dim)
+    rand_strings = get_random_sample(items, dim=dim)
     init = perf_counter()
     vectors = process.cdist(items, rand_strings, scorer=normalized_similarity, workers=-1)
     #vectors = process.cdist(items, rand_strings, scorer=jarowinkler_similarity, workers=-1)
@@ -74,7 +97,8 @@ def test_dedup_exact(data, dedup_col, **kwargs):
     n_duplicates = len(data) - data['label'].nunique()
 
     start = perf_counter()
-    idxs = np.array(get_topk_strings_all(data[dedup_col], data[dedup_col], **kwargs)).reshape(-1, 5)
+    idxs = np.array(get_topk_strings_all(data[dedup_col], data[dedup_col], **kwargs)).reshape(-1, kwargs['k'])
+    #idxs = np.array(get_dedup_candidates(data[dedup_col], **kwargs)).reshape(-1, 5)
     match_df = create_dedupe_df(idxs, np.zeros_like(idxs))
     logging.info('Time taken: {} seconds'.format(perf_counter() - start))
 
@@ -88,6 +112,8 @@ def test_dedup_exact(data, dedup_col, **kwargs):
     return match_df
 
 
+
+
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
 
@@ -96,8 +122,8 @@ if __name__ == '__main__':
 
     K = 5
 
-    data = data.sample(100_000).reset_index(drop=True)
-    match_df = test_dedup_exact(data, 'company', k=K)
+    ## data = data.sample(75_000).reset_index(drop=True)
+    ## match_df = test_dedup_exact(data, 'company', k=K)
 
     n_duplicates = len(data) - data['label'].nunique()
 
@@ -105,7 +131,7 @@ if __name__ == '__main__':
     dims    = [32, 64, 128, 256, 512, 1024]
     for dim in dims:
         logging.info(f'Dimension: {dim}')
-        match_df = test_dedup(data, 'company', k=K, dim=dim, exact=False)
+        match_df = test_dedup(data, 'company', k=K, dim=dim, exact=True)
         recalls.append(np.sum(match_df['is_match']) / n_duplicates)
 
     plt.plot(dims, recalls)
