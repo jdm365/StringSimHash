@@ -1,5 +1,6 @@
 #include <string>
 #include <vector>
+#include <algorithm>
 #include <chrono>
 
 #include "omp.h"
@@ -32,15 +33,45 @@ float get_sim_normed(const std::string& a, const std::string& b) {
 	return 1.0f - ((float)dp[m][n] / (float)std::max(m, n));
 }
 
+float get_sim_normed_hirsch(const std::string& a, const std::string& b) {
+	if (a.length() < b.length()) {
+        return get_sim_normed_hirsch(b, a);
+    }
+
+    int m = a.length();
+	int n = b.length();
+
+    //std::vector<int> prev(n + 1), curr(n + 1);
+	int prev[256];
+	int curr[256];
+
+    for (int j = 0; j <= n; j++) {
+        prev[j] = j;
+    }
+
+    for (int i = 1; i <= m; i++) {
+        curr[0] = i;
+        for (int j = 1; j <= n; j++) {
+            if (a[i-1] == b[j-1]) {
+                curr[j] = prev[j-1];
+            } else {
+                curr[j] = 1 + std::min(curr[j-1], prev[j]);
+            }
+        }
+        std::swap(prev, curr);
+    }
+	return 1.0f - ((float)prev[n] / (float)m);
+}
+
 
 float get_sim_normed_indel(const std::string& a, const std::string& b) {
 	char freq_table[128] = {0};
 
-	for (char c: a) {
+	for (const char c: a) {
 		++freq_table[(int)c];
 	}
 
-	for (char c: b) {
+	for (const char c: b) {
 		--freq_table[(int)c];
 	}
 
@@ -50,6 +81,20 @@ float get_sim_normed_indel(const std::string& a, const std::string& b) {
 	}
 
 	return 1.0f - ((float)distance / (float)(2 * std::max(a.length(), b.length())));
+}
+
+
+float get_sim_normed_indel_cached(char(freq_table)[128], int a_len, const std::string& b) {
+	for (const char c: b) {
+		--freq_table[(int)c];
+	}
+
+	char distance = 0;
+	for (int idx = 0; idx < 128; ++idx) {
+		distance += std::abs(freq_table[idx]);
+	}
+
+	return 1.0f - ((float)distance / (float)(2 * std::max(a_len, (int)b.length())));
 }
 
 
@@ -104,8 +149,9 @@ std::vector<int> get_topk_strings_all(
 		}
 
 		for (int jdx = 0; jdx < n_searches; ++jdx) {
-			// distance = get_sim_normed(query_strings[idx], search_strings[jdx]);
-			distance = get_sim_normed_indel(query_strings[idx], search_strings[jdx]);
+			distance = get_sim_normed(query_strings[idx], search_strings[jdx]);
+			//distance = get_sim_normed_hirsch(query_strings[idx], search_strings[jdx]);
+			//distance = get_sim_normed_indel(query_strings[idx], search_strings[jdx]);
 
 			if (jdx < k) {
 				_topk_idxs[jdx] = jdx;
@@ -135,9 +181,10 @@ std::vector<int> get_dedup_candidates(std::vector<std::string> strings, int k) {
 	std::vector<int> topk_idxs(n_strings * k);
 
 	// Bad. Not obvious. Need to fix.
+	char freq_table[128] = {0};
 
 
-	#pragma omp parallel for
+	#pragma omp parallel for private(freq_table)
 	for (int idx = 0; idx < n_strings; ++idx) {
 		float topk_distances[k];
 		int   _topk_idxs[k];
@@ -151,7 +198,16 @@ std::vector<int> get_dedup_candidates(std::vector<std::string> strings, int k) {
 			if (idx < jdx) continue;
 
 			// distance = get_sim_normed(query_strings[idx], search_strings[jdx]);
-			distance = get_sim_normed_indel(strings[idx], strings[jdx]);
+			if (jdx == 0) {
+				char freq_table[128] = {0};
+
+				for (char c: strings[idx]) {
+					++freq_table[(int)c];
+				}
+			}
+
+			//distance = get_sim_normed_indel(strings[idx], strings[jdx]);
+			distance = get_sim_normed_indel_cached(freq_table, (int)strings[idx].length(), strings[jdx]);
 
 			if (jdx < k) {
 				_topk_idxs[jdx] = jdx;

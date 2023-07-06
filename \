@@ -3,11 +3,12 @@ import pandas as pd
 import numpy as np
 from time import perf_counter
 from rapidfuzz import process
-from rapidfuzz.distance.Indel import normalized_similarity as indel_sim 
+from rapidfuzz.distance.Indel import indel_sim 
 from rapidfuzz.distance.Levenshtein import normalized_similarity as lev_sim 
 from rapidfuzz.distance.JaroWinkler import normalized_similarity as jw_sim 
-from rapidfuzz.distance.Prefix import normalized_similarity as prefix_sim 
-from rapidfuzz.distance.Postfix import normalized_similarity as postfix_sim 
+from rapidfuzz.distance.Prefix import normalized_similarity as jarowinkler_similarity
+from rapidfuzz.distance.Postfix import normalized_similarity as jarowinkler_similarity
+
 import faiss
 import logging
 from matplotlib import pyplot as plt
@@ -90,7 +91,7 @@ def get_random_sample(items, dim=512, neg_sample_dim=128):
         sims = process.cdist(
                 rand_strings, 
                 str_list,
-                scorer=lev_sim, 
+                scorer=normalized_similarity, 
                 workers=-1
                 )
 
@@ -101,37 +102,19 @@ def get_random_sample(items, dim=512, neg_sample_dim=128):
 
 
 def get_sim_embeddings(items, dim=512):
-    SIM_FUNCS = {
-            indel_sim: 0.20,
-            lev_sim: 0.40,
-            jw_sim: 0.20,
-            prefix_sim: 0.10,
-            postfix_sim: 0.10
-            }
-
     #rand_strings = np.random.choice(items, size=dim)
-    #rand_strings = get_random_sample(items, dim // len(SIM_FUNCS))
-    rand_strings = get_random_sample(items, dim)
-
+    rand_strings = get_random_sample(items, dim=dim)
     init = perf_counter()
-
-
-    embeddings = np.zeros((len(items), dim), dtype=np.float32)
-
-    start = 0
-    for sim_func, weight in SIM_FUNCS.items():
-        embeddings[:, start:start + int(weight * len(rand_strings))] = np.array(
-                process.cdist(
-                    items, 
-                    rand_strings[:int(weight * len(rand_strings))],
-                    scorer=sim_func, 
-                    workers=-1
-                    )
-                )
-        start += int(len(rand_strings) * weight)
-
+    vectors = process.cdist(
+            items, 
+            rand_strings, 
+            #scorer=normalized_similarity, 
+            scorer=lev_normalized_similarity, 
+            workers=-1
+            )
+    #vectors = process.cdist(items, rand_strings, scorer=jarowinkler_similarity, workers=-1)
     logging.info(f'Elapsed time: {perf_counter() - init:.2f} seconds')
-    return embeddings 
+    return vectors
 
 
 def dedup(data, k=5, dim=128, exact=False, use_glove=False) -> pd.DataFrame:
@@ -264,7 +247,7 @@ if __name__ == '__main__':
             data, 
             'company', 
             k=K, 
-            dim=512, 
+            dim=256, 
             exact=True,
             use_glove=False
             )

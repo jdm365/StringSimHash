@@ -2,7 +2,7 @@
 #CXXFLAGS = -std=c++11 -stdlib=libc++ -Wall
 CXX = g++
 CXXFLAGS = -std=c++11 -Wall
-CXXFLAGS += -mtune=native -march=native -Ofast -fopenmp
+CXXFLAGS += -mtune=native -Ofast -fopenmp -mavx2
 PYFLAGS = `python3 -m pybind11 --includes`
 PYFILES = -o StringDedup.so -shared -fPIC
 LDLIBS =  -lgomp -lpython3.10
