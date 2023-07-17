@@ -1,4 +1,8 @@
 import torch as T
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
+
 import pandas as pd
 import numpy as np
 from time import perf_counter
@@ -109,8 +113,7 @@ def get_sim_embeddings(items, dim=512):
             postfix_sim: 0.10
             }
 
-    #rand_strings = np.random.choice(items, size=dim)
-    #rand_strings = get_random_sample(items, dim // len(SIM_FUNCS))
+    items = [x.lower() for x in items]
     rand_strings = get_random_sample(items, dim)
 
     init = perf_counter()
@@ -134,7 +137,74 @@ def get_sim_embeddings(items, dim=512):
     return embeddings 
 
 
-def dedup(data, k=5, dim=128, exact=False, use_glove=False) -> pd.DataFrame:
+def fine_tune_embeddings(data, labels, dim=512):
+    y = labels
+    X_orig = get_sim_embeddings(data, dim=dim)
+
+    df = create_training_df(X_orig.tolist(), labels)
+
+    X_0 = T.tensor(np.stack(df['name_0'].values), dtype=T.float32)
+    X_1 = T.tensor(np.stack(df['name_1'].values), dtype=T.float32)
+    y   = df['is_match'].apply(lambda x: 1 if x else -1).values
+    y   = T.tensor(y, dtype=T.float32)
+
+    ## Train model which is just a no-bias linear projection to dim=256 embedding.
+    ## Loss will be CosineSimilarityLoss
+    device = T.device('cuda:0' if T.cuda.is_available() else 'cpu')
+    model = nn.Linear(X_0.shape[-1], dim // 4, bias=False)
+    optimizer = optim.Adam(model.parameters(), lr=1e-3)
+    loss_fn = nn.CosineEmbeddingLoss()
+    model.to(device)
+
+    dataloader = DataLoader(
+            TensorDataset(X_0, X_1, y),
+            batch_size=32,
+            shuffle=True
+            )
+    NUM_EPOCHS = 10
+    losses = []
+
+    progress_bar = tqdm(total=len(dataloader) * NUM_EPOCHS)
+    for _ in range(NUM_EPOCHS):
+        for X_0, X_1, y in dataloader:
+            X_0 = X_0.to(device)
+            X_1 = X_1.to(device)
+            y   = y.to(device)
+
+            emb0 = model(X_0)
+            emb1 = model(X_1)
+            loss = loss_fn(emb0, emb1, y)
+
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+
+            losses.append(loss.item())
+
+            progress_bar.update(1)
+            progress_bar.set_description(f'Loss: {np.mean(losses[-100:]):.4f}')
+
+    progress_bar.close()
+
+    ## Get embeddings from model
+    model.eval()
+    eval_loader = DataLoader(
+            TensorDataset(T.tensor(X_orig, dtype=T.float32)),
+            batch_size=32,
+            shuffle=False
+            )
+    with T.no_grad():
+        embeddings = []
+        for X in tqdm(eval_loader, desc='Embedding items'):
+            X = X[0].to(device)
+            outputs = model(X)
+            embeddings.append(outputs.cpu().numpy())
+        embeddings = np.vstack(embeddings)
+    return embeddings
+
+
+
+def dedup(data, k=5, dim=128, exact=False, use_glove=False, labels=None) -> pd.DataFrame:
     if use_glove:
         embeddings = get_glove_embeddings(data)
         #sim_embeddings = get_sim_embeddings(data, dim=embeddings.shape[-1])
@@ -142,7 +212,8 @@ def dedup(data, k=5, dim=128, exact=False, use_glove=False) -> pd.DataFrame:
         #embeddings = sim_embeddings
         #embeddings = 0.0 * embeddings + 1.0 * sim_embeddings
     else:
-        embeddings = get_sim_embeddings(data, dim=dim)
+        #embeddings = get_sim_embeddings(data, dim=dim)
+        embeddings = fine_tune_embeddings(data, labels, dim=dim)
         #embeddings = get_word2vec_embeddings(data)
 
     device = T.device('cuda:0' if T.cuda.is_available() else 'cpu')
@@ -203,7 +274,7 @@ def test_dedup(data, dedup_col, **kwargs):
     n_duplicates = len(data) - data['label'].nunique()
 
     start = perf_counter()
-    match_df = dedup(data[dedup_col], **kwargs)
+    match_df = dedup(data[dedup_col], labels=data['label'], **kwargs)
     logging.info('Time taken: {} seconds'.format(perf_counter() - start))
 
     match_df['orig_label']  = np.array(data['label'].values)[match_df['orig_idxs'].values.astype(int)]
@@ -242,6 +313,36 @@ def test_dedup_exact(data, dedup_col, **kwargs):
 
     return match_df
 
+
+def create_training_df(data, labels):
+    df = pd.DataFrame({'name': data, 'label': labels})
+
+    df['id'] = df.index
+    matches_df = pd.merge(df, df, on='label', suffixes=('_0', '_1'), how='inner')
+    matches_df = matches_df[matches_df['id_0'] != matches_df['id_1']].reset_index(drop=True)
+    matches_df.drop(['id_0', 'id_1', 'label'], axis=1, inplace=True)
+
+    matches_df['is_match'] = 1
+
+    non_matches_df_a = df.sample(len(matches_df) * 2, replace=True).reset_index(drop=True)
+    non_matches_df_b = df.sample(len(matches_df) * 2, replace=True).reset_index(drop=True)
+    
+    non_matches_df_a.drop(['id'], axis=1, inplace=True)
+    non_matches_df_b.drop(['id'], axis=1, inplace=True)
+
+    non_matches_df_a.rename(columns={'name': 'name_0', 'label': 'label_0'}, inplace=True)
+    non_matches_df_b.rename(columns={'name': 'name_1', 'label': 'label_1'}, inplace=True)
+
+    non_matches_df = pd.concat([non_matches_df_a, non_matches_df_b], axis=1)
+
+    non_matches_df = non_matches_df[non_matches_df['label_0'] != non_matches_df['label_1']]
+    non_matches_df = non_matches_df.reset_index(drop=True)
+    non_matches_df['is_match'] = 0
+    non_matches_df.drop(['label_0', 'label_1'], axis=1, inplace=True)
+
+    final_df = pd.concat([matches_df, non_matches_df], axis=0).reset_index(drop=True)
+
+    return final_df 
 
 
 
