@@ -21,7 +21,7 @@ from tqdm import tqdm
 import os
 from transformers import AutoModel, AutoTokenizer
 
-from StringDedup import get_topk_strings_all, get_dedup_candidates
+#from StringDedup import get_topk_strings_all, get_dedup_candidates
 from sentence_transformers import SentenceTransformer
 
 from typing import List
@@ -82,8 +82,14 @@ def get_glove_embeddings(items):
         embeddings = np.vstack(embeddings)
     return embeddings
 
+@njit(parallel=True)
+def get_entropy(sims: np.ndarray):
+    eta = 1e-8
+    return -np.sum(sims * np.log(sims + eta), axis=1) + np.log(np.sum(sims, axis=1) + eta)
+
 
 def get_random_sample(items, dim=512, neg_sample_dim=128):
+    #return np.random.choice(items, size=dim)
     str_list = []
     for idx in range(dim):
         if idx == 0:
@@ -98,19 +104,19 @@ def get_random_sample(items, dim=512, neg_sample_dim=128):
                 workers=-1
                 )
 
-        ## Get least overall similar to current sample
-        avg_sims = np.sum(sims, axis=1)
-        str_list.append(rand_strings[np.argmin(avg_sims)])
+        ## Get string which maximizes entropy of sims
+        entropy = get_entropy(sims)
+        str_list.append(rand_strings[np.argmax(entropy)])
     return str_list
 
 
 def get_sim_embeddings(items, dim=512):
     SIM_FUNCS = {
-            indel_sim: 0.20,
-            lev_sim: 0.40,
-            jw_sim: 0.20,
-            prefix_sim: 0.10,
-            postfix_sim: 0.10
+            #indel_sim: 0.20,
+            lev_sim: 1.00,#0.40,
+            #jw_sim: 0.20,
+            #prefix_sim: 0.10,
+            #postfix_sim: 0.10
             }
 
     items = [x.lower() for x in items]
@@ -212,8 +218,8 @@ def dedup(data, k=5, dim=128, exact=False, use_glove=False, labels=None) -> pd.D
         #embeddings = sim_embeddings
         #embeddings = 0.0 * embeddings + 1.0 * sim_embeddings
     else:
-        #embeddings = get_sim_embeddings(data, dim=dim)
-        embeddings = fine_tune_embeddings(data, labels, dim=dim)
+        embeddings = get_sim_embeddings(data, dim=dim)
+        #embeddings = fine_tune_embeddings(data, labels, dim=dim)
         #embeddings = get_word2vec_embeddings(data)
 
     device = T.device('cuda:0' if T.cuda.is_available() else 'cpu')
