@@ -70,6 +70,203 @@ cdef extern from *:
             int num_perm
             )
 
+## Create parallel_hashes interface
+def hash_strings_parallel(items, num_perm=NUM_PERM):
+    """
+    Hashes a list of strings in parallel using OpenMP.
+    """
+    num_items = len(items)
+    cdef np.ndarray[uint32_t, ndim=2] signatures = np.zeros((num_items, num_perm), dtype=np.uint32)
+    cdef np.ndarray[int, ndim=1] lengths = np.zeros(num_items, dtype=np.int32)
+    cdef list data_list = []
+    
+    cdef char** all_data = <char**> malloc(sizeof(char*) * num_items)
+
+    for idx in range(num_items):
+        data_list.append(items[idx].encode('utf-8'))
+        all_data[idx] = data_list[idx]
+        lengths[idx]  = len(data_list[idx])
+
+
+    parallel_hashes(
+        &signatures[0, 0],
+        all_data,
+        &lengths[0],
+        num_items,
+        num_perm
+    )
+
+    ## Free memory
+    free(all_data)
+
+    return signatures
+
+cdef extern from *:
+    """
+    #include <stdint.h>
+    #include <string.h>
+    #include <omp.h>
+
+    void _shingle_hash(
+            uint32_t* hash_signatures, 
+            char** all_data, 
+            const int* lengths, 
+            int num_items, 
+            int n_gram_size
+            ) {
+        // Calculate the offsets before parallelization
+        int offsets[num_items];
+        int offset = 0;
+        for (int item = 0; item < num_items; ++item) {
+            offsets[item] = offset;
+            offset += lengths[item];
+        }
+
+        // Loop over each item
+        #pragma omp parallel for
+        for (int item = 0; item < num_items; ++item) {
+            char* data = all_data[item];
+            int local_offset = offsets[item];
+
+            if (lengths[item] == 1) {
+                hash_signatures[local_offset] = 0;
+                continue;
+            }
+
+            // Loop over each n_gram idx
+            for (int idx = 0; idx <= lengths[item]; ++idx) {
+                uint32_t hash = 0;
+                uint32_t m = 0x5bd1e995;
+                int r = 24;
+
+                // Hash each n_gram
+                for (int j = 0; j < n_gram_size; ++j) {
+                    uint32_t n = (uint32_t)data[idx + j];
+                    n *= m;
+                    n &= 0xFFFFFFFF;
+                    n ^= n >> r;
+                    n *= m;
+
+                    hash *= m;
+                    hash ^= n;
+                }
+
+                // Finalize hash
+                hash ^= n_gram_size;
+                hash ^= hash >> 16;
+                hash *= 0x85ebca6b;
+                hash &= 0xFFFFFFFF;
+                hash ^= hash >> 13;
+                hash *= 0xc2b2ae35;
+                hash &= 0xFFFFFFFF;
+                hash ^= hash >> 15;
+
+                // Write hash to results array
+                hash_signatures[local_offset + idx] = hash;
+            }
+        }
+    }
+    """
+    void _shingle_hash(
+            uint32_t* hash_signatures, 
+            char** all_data, 
+            int* lengths, 
+            int num_items, 
+            int n_gram_size,
+            )
+
+## Create parallel_hashes interface
+def shingle_hash(items, n_gram_size=NGRAM_SIZE):
+    """
+    Hashes a list of strings in parallel using OpenMP.
+    """
+    ## signatures should be a list of list containing the signatures for each item
+    num_items = len(items)
+    cdef np.ndarray[int, ndim=1] lengths = np.zeros(num_items, dtype=np.int32)
+    for idx in range(num_items):
+        lengths[idx] = max(len(items[idx]) - n_gram_size + 1, 1)
+
+    cdef int total_values = np.sum(lengths)
+
+    ## Create signatures array. 1d array. Determine size by summing the lengths of each item - n_gram_size + 1
+    cdef np.ndarray[uint32_t, ndim=1] hash_signatures = np.zeros(total_values, dtype=np.uint32)
+
+    cdef list data_list = []
+
+    cdef char** all_data = <char**> malloc(sizeof(char*) * num_items)
+
+    for idx in range(num_items):
+        data_item = items[idx].encode('utf-8')
+        data_list.append(data_item)
+        all_data[idx] = <char*> data_item
+
+    _shingle_hash(
+        &hash_signatures[0],
+        all_data,
+        &lengths[0],
+        num_items,
+        n_gram_size
+    )
+
+    ## Copy hash_signatures to a list of lists
+    signatures = []
+    offset = 0
+    for idx in range(num_items):
+        signatures.append(hash_signatures[offset:offset + lengths[idx]])
+        offset += lengths[idx]
+
+    ## Free memory.
+    free(all_data)
+
+    return signatures
+
+
+## Create parallel_hashes interface
+def shingle_hash_set(items, n_gram_size=NGRAM_SIZE):
+    """
+    Hashes a list of strings in parallel using OpenMP.
+    """
+    ## signatures should be a list of list containing the signatures for each item
+    num_items = len(items)
+    cdef np.ndarray[int, ndim=1] lengths = np.zeros(num_items, dtype=np.int32)
+    for idx in range(num_items):
+        lengths[idx] = max(len(items[idx]) - n_gram_size + 1, 1)
+
+    cdef int total_values = np.sum(lengths)
+
+    ## Create signatures array. 1d array. Determine size by summing the lengths of each item - n_gram_size + 1
+    cdef np.ndarray[uint32_t, ndim=1] hash_signatures = np.zeros(total_values, dtype=np.uint32)
+
+    cdef list data_list = []
+
+    cdef char** all_data = <char**> malloc(sizeof(char*) * num_items)
+
+    for idx in range(num_items):
+        data_item = items[idx].encode('utf-8')
+        data_list.append(data_item)
+        all_data[idx] = <char*> data_item
+
+    _shingle_hash(
+        &hash_signatures[0],
+        all_data,
+        &lengths[0],
+        num_items,
+        n_gram_size
+    )
+
+    ## Copy hash_signatures to a list of lists
+    signatures = []
+    offset = 0
+    for idx in range(num_items):
+        signature = np.unique(hash_signatures[offset:offset + lengths[idx]])
+        signatures.append(signature)
+        ## offset += lengths[idx]
+        offset += len(signature)
+
+    ## Free memory.
+    free(all_data)
+
+    return signatures
 
 cdef extern from *:
     """
